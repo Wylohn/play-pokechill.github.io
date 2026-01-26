@@ -198,6 +198,132 @@
       width: 120px;
       height: 120px;
       object-fit: contain;
+    }
+
+    /* Notification System */
+    #notification-container {
+      position: fixed;
+      bottom: 80px;
+      right: 20px;
+      width: 350px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 10px;
+      z-index: 99999;
+      pointer-events: none;
+    }
+
+    .notification {
+      background: var(--dark1);
+      border: 2px solid var(--light1);
+      border-radius: 10px;
+      padding: 15px;
+      box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      animation: slideIn 0.3s ease-out;
+      pointer-events: auto;
+      cursor: pointer;
+      transition: transform 0.2s, opacity 0.3s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .notification:hover {
+      transform: translateX(-5px);
+    }
+
+    .notification.removing {
+      animation: slideOut 0.3s ease-out;
+      opacity: 0;
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(400px);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+
+    @keyframes slideOut {
+      from {
+        transform: translateX(0);
+        opacity: 1;
+      }
+      to {
+        transform: translateX(400px);
+        opacity: 0;
+      }
+    }
+
+    .notification-icon {
+      width: 50px;
+      height: 50px;
+      object-fit: contain;
+      flex-shrink: 0;
+    }
+
+    .notification-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .notification-title {
+      color: var(--light2);
+      font-weight: bold;
+      font-size: 14px;
+    }
+
+    .notification-message {
+      color: var(--light1);
+      font-size: 12px;
+    }
+
+    .notification-close {
+      position: absolute;
+      top: 5px;
+      right: 5px;
+      width: 20px;
+      height: 20px;
+      background: rgba(231, 76, 60, 0.8);
+      border: none;
+      border-radius: 50%;
+      color: white;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    .notification:hover .notification-close {
+      opacity: 1;
+    }
+
+    .notification-close:hover {
+      background: #e74c3c;
+    }
+
+    .notification-shiny {
+      border-color: #FFD700;
+      background: linear-gradient(135deg, var(--dark1) 0%, rgba(255, 215, 0, 0.1) 100%);
+    }
+
+    .notification-new {
+      border-color: #3498db;
+      background: linear-gradient(135deg, var(--dark1) 0%, rgba(52, 152, 219, 0.1) 100%);
+    }
+
       image-rendering: pixelated;
     }
 
@@ -478,8 +604,20 @@
       this.selectedPokemon = null;
       this.editingPokemon = null;
       this.selectedMoves = [];
-      this.autoRepeatEnabled = false;
-      this.autoRepeatCount = 0;
+      
+      // Initialiser saved.debugSettings s'il n'existe pas
+      if (!saved.debugSettings) {
+        saved.debugSettings = {
+          autoRepeatEnabled: false,
+          autoRepeatCount: 0,
+          stopOnShiny: false,
+          battleSpeed: 1
+        };
+      }
+      
+      this.autoRepeatEnabled = saved.debugSettings.autoRepeatEnabled || false;
+      this.autoRepeatCount = saved.debugSettings.autoRepeatCount || 0;
+      this.stopOnShiny = saved.debugSettings.stopOnShiny || false;
       this.autoRepeatCurrent = 0;
       this.autoRepeatInterval = null;
       this.lastArea = null;
@@ -499,6 +637,8 @@
       this.createDebugPanel();
       this.createToggleButton();
       this.registerShortcuts();
+      this.createNotificationContainer();
+      this.setupPokemonWatcher();
       
       console.log('%c🔧 Debug Mode Loaded!', 'color: #0f0; font-size: 16px; font-weight: bold;');
       console.log('%cPress Ctrl+D or click the button to open', 'color: #0af; font-size: 14px;');
@@ -524,6 +664,119 @@
         document.body.appendChild(toggleBtn);
       }
     }
+
+    createNotificationContainer() {
+      // Remove old container if exists
+      const oldContainer = document.getElementById('notification-container');
+      if (oldContainer) oldContainer.remove();
+
+      const container = document.createElement('div');
+      container.id = 'notification-container';
+      document.body.appendChild(container);
+      this.notificationContainer = container;
+    }
+
+    showNotification(type, title, message, iconPath = null, duration = 5000) {
+      const notification = document.createElement('div');
+      notification.className = `notification notification-${type}`;
+      
+      // Create icon if provided
+      let iconHTML = '';
+      if (iconPath) {
+        iconHTML = `<img src="${iconPath}" alt="${title}" class="notification-icon">`;
+      }
+      
+      notification.innerHTML = `
+        ${iconHTML}
+        <div class="notification-content">
+          <div class="notification-title">${title}</div>
+          <div class="notification-message">${message}</div>
+        </div>
+        <button class="notification-close" onclick="this.parentElement.remove()">×</button>
+      `;
+      
+      // Click to dismiss
+      notification.addEventListener('click', (e) => {
+        if (!e.target.classList.contains('notification-close')) {
+          notification.classList.add('removing');
+          setTimeout(() => notification.remove(), 300);
+        }
+      });
+      
+      this.notificationContainer.appendChild(notification);
+      
+      // Keep max 8 notifications - remove oldest when exceeding limit
+      const notifications = this.notificationContainer.querySelectorAll('.notification');
+      if (notifications.length > 8) {
+        notifications[0].classList.add('removing');
+        setTimeout(() => notifications[0].remove(), 300);
+      }
+    }
+
+    notifyShinyFound(pokemonId) {
+      if (!pkmn[pokemonId]) return;
+      
+      const iconPath = `img/pkmn/shiny/${pokemonId}.png`;
+      this.showNotification(
+        'shiny',
+        '✨ Shiny Trouvé!',
+        `${format(pokemonId)} est shiny!`,
+        iconPath,
+        0
+      );
+    }
+
+    notifyNewPokemon(pokemonId) {
+      if (!pkmn[pokemonId]) return;
+      
+      const iconPath = `img/pkmn/sprite/${pokemonId}.png`;
+      this.showNotification(
+        'new',
+        '🆕 Nouveau Pokémon!',
+        `${format(pokemonId)} ajouté au Pokédex!`,
+        iconPath,
+        0
+      );
+    }
+
+    setupPokemonWatcher() {
+      // Sauvegarder l'état initial de tous les Pokémon
+      this.pokemonStates = {};
+      Object.keys(pkmn).forEach(id => {
+        this.pokemonStates[id] = {
+          caught: pkmn[id].caught || 0,
+          shiny: pkmn[id].shiny || false
+        };
+      });
+
+      // Surveiller les changements toutes les 500ms
+      setInterval(() => {
+        Object.keys(pkmn).forEach(id => {
+          const currentState = this.pokemonStates[id];
+          const pokemon = pkmn[id];
+          
+          // Nouveau Pokémon capturé
+          if (currentState.caught === 0 && pokemon.caught > 0) {
+            this.notifyNewPokemon(id);
+            currentState.caught = pokemon.caught;
+          }
+          // Pokémon devient shiny
+          else if (!currentState.shiny && pokemon.shiny === true && pokemon.caught > 0) {
+            this.notifyShinyFound(id);
+            currentState.shiny = true;
+          }
+          // Mise à jour du compteur de captures
+          else if (currentState.caught !== pokemon.caught) {
+            currentState.caught = pokemon.caught;
+          }
+        });
+      }, 500);
+      
+      console.log('%c🔔 Pokemon Watcher Active', 'color: #0fa; font-size: 12px;');
+    }
+
+
+
 
     createDebugPanel() {
       const panel = document.createElement('div');
@@ -766,6 +1019,9 @@
               <label>Battle Count (0 = infinite):</label>
               <input type="number" id="debug-repeat-count" min="0" value="0" style="width: 100%; padding: 8px; background: var(--dark1); border: 2px solid var(--light1); border-radius: 5px; color: var(--light2);" />
             </div>
+            <div style="margin-top: 10px;">
+              <label><input type="checkbox" id="debug-stop-on-shiny" /> Stop on Shiny Detected</label>
+            </div>
             <div style="margin-top: 10px; padding: 10px; background: var(--dark2); border-radius: 5px;">
               <div>Status: <span id="debug-repeat-status">Stopped</span></div>
               <div>Battles: <span id="debug-repeat-counter">0</span></div>
@@ -808,6 +1064,12 @@
           <button class="debug-btn-action" onclick="window.debugMode.exportSave()">Export Save</button>
           <button class="debug-btn-action" onclick="window.debugMode.importSave()">Import Save</button>
           <button class="debug-btn-action" onclick="window.debugMode.resetSave()">Reset Save (Warning!)</button>
+        </div>
+
+        <div class="debug-section">
+          <h3>Test Notifications</h3>
+          <button class="debug-btn-action" onclick="window.notify.shiny('pikachu')">Test Shiny Notification</button>
+          <button class="debug-btn-action" onclick="window.notify.newPokemon('charizard')">Test New Pokemon</button>
         </div>
       `;
       return tab;
@@ -878,13 +1140,38 @@
     }
 
     initQuickActionsTab() {
-      // Auto-repeat checkbox
+      // Restaurer les valeurs sauvegardées
       const autoRepeatCheckbox = document.getElementById('debug-auto-repeat');
+      const repeatCountInput = document.getElementById('debug-repeat-count');
+      const stopOnShinyCheckbox = document.getElementById('debug-stop-on-shiny');
+      const speedInput = document.getElementById('debug-battle-speed');
+      
+      if (autoRepeatCheckbox) {
+        autoRepeatCheckbox.checked = saved.debugSettings.autoRepeatEnabled;
+      }
+      if (repeatCountInput) {
+        repeatCountInput.value = saved.debugSettings.autoRepeatCount || 0;
+      }
+      if (stopOnShinyCheckbox) {
+        stopOnShinyCheckbox.checked = saved.debugSettings.stopOnShiny || false;
+      }
+      if (speedInput) {
+        speedInput.value = saved.debugSettings.battleSpeed || 1;
+        document.getElementById('debug-speed-value').textContent = (saved.debugSettings.battleSpeed || 1).toFixed(1) + 'x';
+        // Appliquer la vitesse sauvegardée
+        saved.overrideBattleTimer = 2000 / (saved.debugSettings.battleSpeed || 1);
+      }
+      
+      // Auto-repeat checkbox
       if (autoRepeatCheckbox) {
         autoRepeatCheckbox.addEventListener('change', (e) => {
           this.autoRepeatEnabled = e.target.checked;
+          saved.debugSettings.autoRepeatEnabled = e.target.checked;
+          saveGame();
+          
           if (this.autoRepeatEnabled) {
             this.autoRepeatCount = parseInt(document.getElementById('debug-repeat-count').value) || 0;
+            saved.debugSettings.autoRepeatCount = this.autoRepeatCount;
             this.autoRepeatCurrent = 0;
             this.startAutoRepeat();
           } else {
@@ -892,9 +1179,25 @@
           }
         });
       }
+      
+      // Battle count input
+      if (repeatCountInput) {
+        repeatCountInput.addEventListener('change', (e) => {
+          saved.debugSettings.autoRepeatCount = parseInt(e.target.value) || 0;
+          saveGame();
+        });
+      }
+      
+      // Stop on shiny checkbox
+      if (stopOnShinyCheckbox) {
+        stopOnShinyCheckbox.addEventListener('change', (e) => {
+          this.stopOnShiny = e.target.checked;
+          saved.debugSettings.stopOnShiny = e.target.checked;
+          saveGame();
+        });
+      }
 
       // Battle speed input
-      const speedInput = document.getElementById('debug-battle-speed');
       const applySpeedBtn = document.getElementById('debug-apply-speed');
       if (speedInput && applySpeedBtn) {
         const applySpeed = () => {
@@ -904,6 +1207,9 @@
           speedInput.value = speed.toFixed(1);
           document.getElementById('debug-speed-value').textContent = speed.toFixed(1) + 'x';
           saved.overrideBattleTimer = 2000 / speed;
+          saved.debugSettings.battleSpeed = speed;
+          saveGame();
+          console.log(`⚡ Battle speed set to ${speed}x`);
         };
         applySpeedBtn.addEventListener('click', applySpeed);
         speedInput.addEventListener('keypress', (e) => {
@@ -1099,6 +1405,9 @@
 
       const selectedAbility = document.getElementById('debug-ability').value;
 
+      // Check if it's a new pokemon
+      const isNewPokemon = !pokemon.caught || pokemon.caught === 0;
+
       pokemon.caught = pokemon.caught ? pokemon.caught + 1 : 1;
       pokemon.level = level;
       pokemon.shiny = isShiny;
@@ -1152,6 +1461,14 @@
       updatePokedex();
       updatePreviewTeam();
       saveGame();
+
+      // Show notifications
+      if (isShiny) {
+        this.notifyShinyFound(this.selectedPokemon);
+      }
+      if (isNewPokemon) {
+        this.notifyNewPokemon(this.selectedPokemon);
+      }
 
       alert(`${format(this.selectedPokemon)} added!\nLevel: ${level}\nShiny: ${isShiny}`);
     }
@@ -1281,6 +1598,8 @@
           console.log(`✅ Auto Repeat completed: ${this.autoRepeatCurrent} battles`);
           this.stopAutoRepeat();
           document.getElementById('debug-auto-repeat').checked = false;
+          saved.debugSettings.autoRepeatEnabled = false;
+          saveGame();
           alert(`Auto Repeat completed!\nTotal battles: ${this.autoRepeatCurrent}`);
           return;
         }
@@ -1301,7 +1620,20 @@
         
         // Battle just ended - "Fight Again" button appeared
         if (isRejoinVisible && this.inBattle && !this.waitingToRestart && !this.justRestarted) {
-          console.log('✅ Battle ended! Waiting 3 seconds before clicking "Fight Again"...');
+          console.log('✅ Battle ended! Checking for new Pokemon...');
+          
+          // Vérifier si un shiny a été obtenu pendant le combat
+          if (this.stopOnShiny && this.checkForNewShiny()) {
+            console.log('✨ Shiny Pokemon obtained! Stopping auto repeat...');
+            this.stopAutoRepeat();
+            document.getElementById('debug-auto-repeat').checked = false;
+            saved.debugSettings.autoRepeatEnabled = false;
+            saveGame();
+            alert('✨ Auto Repeat stopped!\nShiny Pokemon obtained during battle!');
+            return;
+          }
+          
+          console.log('Waiting 3 seconds before clicking "Fight Again"...');
           this.inBattle = false;
           this.waitingToRestart = true;
           this.restartTime = now;
@@ -1331,6 +1663,41 @@
     isBattleActive() {
       return saved.currentArea !== undefined;
     }
+    
+    checkForNewShiny() {
+      // Chercher dans la liste des Pokémon obtenus après le combat
+      const pkmnList = document.getElementById('area-end-pkmn-list');
+      
+      if (!pkmnList || pkmnList.style.display === 'none') {
+        console.log('🔍 Pokemon list not visible or not found');
+        return false;
+      }
+      
+      // Chercher les divs de Pokémon qui contiennent le tag "✦Shiny✦!"
+      const allPokemonDivs = pkmnList.children;
+      
+      for (const div of allPokemonDivs) {
+        // Vérifier si le div contient le texte "✦Shiny✦!" dans un span
+        const spans = div.querySelectorAll('span');
+        for (const span of spans) {
+          if (span.textContent.includes('✦Shiny✦!') || span.textContent.includes('Shiny')) {
+            console.log('✨ SHINY DETECTED! Text:', span.textContent);
+            return true;
+          }
+        }
+        
+        // Vérifier aussi si l'image provient du dossier "shiny"
+        const img = div.querySelector('img');
+        if (img && img.src.includes('/shiny/')) {
+          console.log('✨ SHINY DETECTED via image path!');
+          console.log('Image src:', img.src);
+          return true;
+        }
+      }
+      
+      console.log('✅ No shiny detected in', allPokemonDivs.length, 'Pokemon');
+      return false;
+    }
 
     stopAutoRepeat() {
       if (this.autoRepeatInterval) {
@@ -1339,6 +1706,8 @@
       }
       
       this.autoRepeatEnabled = false;
+      saved.debugSettings.autoRepeatEnabled = false;
+      saveGame();
       this.inBattle = false;
       this.waitingToRestart = false;
       this.restartTime = 0;
@@ -1773,10 +2142,17 @@
   // Initialize and expose globally
   window.debugMode = new DebugMode();
   
+  // Expose notification API globally for other scripts to use
+  window.notify = {
+    shiny: (pokemonId) => window.debugMode.notifyShinyFound(pokemonId),
+    newPokemon: (pokemonId) => window.debugMode.notifyNewPokemon(pokemonId)
+  };
+  
   console.log('%c═══════════════════════════════════════', 'color: #0af;');
   console.log('%c  🎮 POKECHILL DEBUG MODE ACTIVATED  ', 'color: #0f0; font-size: 16px; font-weight: bold;');
   console.log('%c═══════════════════════════════════════', 'color: #0af;');
   console.log('%c  Press Ctrl+D to open debug panel', 'color: #fff;');
   console.log('%c  Type debugMode for API access', 'color: #fff;');
+  console.log('%c  Notification System Ready 🔔', 'color: #0fa;');
   console.log('%c═══════════════════════════════════════', 'color: #0af;');
 })();

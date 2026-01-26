@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Demo - Système de Notifications PokeChill</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .demo-container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 600px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .demo-button {
+            padding: 15px 20px;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            color: white;
+        }
+
+        .demo-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .demo-button:active {
+            transform: translateY(0);
+        }
+
+        .btn-shiny {
+            background: linear-gradient(135deg, #FFD700, #FFA500);
+        }
+
+        .btn-new {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+        }
+
+        .btn-item {
+            background: linear-gradient(135deg, #9b59b6, #8e44ad);
+        }
+
+        .btn-achievement {
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+        }
+
+        .btn-info {
+            background: linear-gradient(135deg, #34495e, #2c3e50);
+        }
+
+        .btn-clear {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            grid-column: span 2;
+        }
+
+        .info-box {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+
+        .info-box h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .info-box p {
+            color: #666;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .info-box code {
+            background: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            color: #e74c3c;
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #999;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="demo-container">
+        <h1>🔔 Système de Notifications</h1>
+        <p class="subtitle">Démonstration PokeChill</p>
+
+        <div class="button-grid">
+            <button class="demo-button btn-shiny" onclick="testShiny()">
+                ✨ Shiny Trouvé
+            </button>
+            <button class="demo-button btn-new" onclick="testNewPokemon()">
+                🆕 Nouveau Pokémon
+            </button>
+            <button class="demo-button btn-clear" onclick="clearNotifications()">
+                🗑️ Effacer toutes les notifications
+            </button>
+        </div>
+
+        <div class="info-box">
+            <h3>Comment utiliser ?</h3>
+            <p>
+                Cliquez sur les boutons ci-dessus pour tester les notifications.
+                Les notifications apparaîtront en bas à droite de la page.
+            </p>
+            <p style="margin-top: 10px;">
+                <strong>Les notifications persistent jusqu'à ce que vous les fermiez ou que plus de 8 soient affichées.</strong>
+            </p>
+            <p style="margin-top: 10px;">
+                Dans le jeu, utilisez : <code>notify.shiny('pikachu')</code> ou 
+                <code>notify.newPokemon('charizard')</code>
+            </p>
+        </div>
+
+        <footer>
+            PokeChill Debug Mode - Système de Notifications v1.0
+        </footer>
+    </div>
+
+    <script>
+        // Simuler l'API de notifications pour la démo
+        const pokemonNames = ['Pikachu', 'Charizard', 'Bulbasaur', 'Squirtle', 'Mewtwo', 'Eevee', 'Gengar', 'Dragonite'];
+        const items = ['Potion', 'Super Potion', 'Rare Candy', 'Master Ball', 'TM50', 'Revive'];
+        
+        let notificationId = 0;
+
+        function showNotification(type, title, message, icon = null) {
+            // Créer le conteneur s'il n'existe pas
+            let container = document.getElementById('notification-container');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'notification-container';
+                container.style.cssText = `
+                    position: fixed;
+                    bottom: 80px;
+                    right: 20px;
+                    width: 350px;
+                    max-height: 80vh;
+                    display: flex;
+                    flex-direction: column-reverse;
+                    gap: 10px;
+                    z-index: 99999;
+                    pointer-events: none;
+                `;
+                document.body.appendChild(container);
+            }
+
+            const notification = document.createElement('div');
+            notification.className = `notification notification-${type}`;
+            notification.id = `notif-${notificationId++}`;
+            
+            let borderColor = '#94886B';
+            let bgGradient = 'rgba(255, 255, 255, 0.05)';
+            
+            if (type === 'shiny') {
+                borderColor = '#FFD700';
+                bgGradient = 'rgba(255, 215, 0, 0.1)';
+            } else if (type === 'new') {
+                borderColor = '#3498db';
+                bgGradient = 'rgba(52, 152, 219, 0.1)';
+            } else if (type === 'item') {
+                borderColor = '#9b59b6';
+                bgGradient = 'rgba(155, 89, 182, 0.1)';
+            } else if (type === 'achievement') {
+                borderColor = '#2ecc71';
+                bgGradient = 'rgba(46, 204, 113, 0.1)';
+            }
+            
+            notification.style.cssText = `
+                background: linear-gradient(135deg, #36342F 0%, ${bgGradient} 100%);
+                border: 2px solid ${borderColor};
+                border-radius: 10px;
+                padding: 15px;
+                box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5);
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                cursor: pointer;
+                pointer-events: auto;
+                position: relative;
+                overflow: hidden;
+                animation: slideIn 0.3s ease-out;
+            `;
+            
+            let iconHTML = icon ? `<div style="width: 50px; height: 50px; background: ${icon}; border-radius: 50%; flex-shrink: 0;"></div>` : '';
+            
+            notification.innerHTML = `
+                ${iconHTML}
+                <div style="flex: 1;">
+                    <div style="color: #ECDEB7; font-weight: bold; font-size: 14px; margin-bottom: 4px;">${title}</div>
+                    <div style="color: #94886B; font-size: 12px;">${message}</div>
+                </div>
+                <button style="position: absolute; top: 5px; right: 5px; width: 20px; height: 20px; background: rgba(231, 76, 60, 0.8); border: none; border-radius: 50%; color: white; font-size: 12px; cursor: pointer; display: none;">×</button>
+            `;
+            
+            // Ajouter les styles d'animation
+            if (!document.getElementById('notif-styles')) {
+                const styleEl = document.createElement('style');
+                styleEl.id = 'notif-styles';
+                styleEl.textContent = `
+                    @keyframes slideIn {
+                        from { transform: translateX(400px); opacity: 0; }
+                        to { transform: translateX(0); opacity: 1; }
+                    }
+                    @keyframes slideOut {
+                        from { transform: translateX(0); opacity: 1; }
+                        to { transform: translateX(400px); opacity: 0; }
+                    }
+                    .notification:hover button { display: flex !important; align-items: center; justify-content: center; }
+                    .notification.removing { animation: slideOut 0.3s ease-out; }
+                `;
+                document.head.appendChild(styleEl);
+            }
+            
+            notification.addEventListener('click', (e) => {
+                if (e.target.tagName !== 'BUTTON') {
+                    removeNotification(notification);
+                }
+            });
+            
+            notification.querySelector('button').addEventListener('click', (e) => {
+                e.stopPropagation();
+                removeNotification(notification);
+            });
+            
+            container.appendChild(notification);
+            
+            // Keep max 8 notifications - remove oldest when exceeding limit
+            const notifications = container.querySelectorAll('.notification');
+            if (notifications.length > 8) {
+                removeNotification(notifications[0]);
+            }
+        }
+
+        function removeNotification(notification) {
+            notification.classList.add('removing');
+            setTimeout(() => {
+                if (notification.parentElement) {
+                    notification.remove();
+                }
+            }, 300);
+        }
+
+        function testShiny() {
+            const pokemon = pokemonNames[Math.floor(Math.random() * pokemonNames.length)];
+            showNotification('shiny', '✨ Shiny Trouvé!', `${pokemon} est shiny!`, '#FFD700');
+        }
+
+        function testNewPokemon() {
+            const pokemon = pokemonNames[Math.floor(Math.random() * pokemonNames.length)];
+            showNotification('new', '🆕 Nouveau Pokémon!', `${pokemon} ajouté au Pokédex!`, '#3498db');
+        }
+
+        function clearNotifications() {
+            const container = document.getElementById('notification-container');
+            if (container) {
+                const notifications = container.querySelectorAll('.notification');
+                notifications.forEach(notif => removeNotification(notif));
+            }
+        }
+    </script>
+</body>
+</html>
