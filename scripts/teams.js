@@ -417,25 +417,27 @@ function setPkmnTeamHp(){
 }
 
 
-function switchMemberNext() { //used for stuff like u turn
-    let current = Number(exploreActiveMember.replace("slot", ""));
-    let checked = 0;
-
-    while (checked < 6) {
-        current++;
-        if (current > 6) current = 1;
-        checked++;
-
-        let nextSlot = "slot" + current;
-
-        if (
-            team[nextSlot]?.pkmn !== undefined &&
-            pkmn[ team[nextSlot].pkmn.id ].playerHp > 0
-        ) {
-            switchMember(nextSlot);
-            return;
-        }
+function switchMemberNext(direction = 1) { // -1 for backwards
+  let current = Number(exploreActiveMember.replace("slot", ""));
+  let checked = 0;
+  
+  while (checked < 6) {
+    current += direction;
+    
+    if (current > 6) current = 1;
+    if (current < 1) current = 6;
+    
+    checked++;
+    
+    let nextSlot = "slot" + current;
+    if (
+      team[nextSlot]?.pkmn !== undefined &&
+      pkmn[team[nextSlot].pkmn.id].playerHp > 0
+    ) {
+      switchMember(nextSlot);
+      return;
     }
+  }
 }
 
 
@@ -458,7 +460,14 @@ function switchMember(member){
     }
 
 
+
+
+
+
     if (pkmn[ team[member].pkmn.id ].playerHp <= 0) return;
+
+
+
 
 
 
@@ -466,10 +475,9 @@ function switchMember(member){
     //reset move buildup, ie rollout
     for (const learntMoveID of pkmn[ team[exploreActiveMember].pkmn.id ].movepool) if(move[learntMoveID]?.buildup!==undefined) move[learntMoveID].buildup = 0
 
-
+    lastCrossStab = undefined
     barProgressPlayer = 0
     if (barPlayer) barPlayer.style.width = 0
-    exploreCombatPlayerTurn = 1
     exploreActiveMember = member
 
 
@@ -518,6 +526,12 @@ function setPkmnTeam(){
         
 
         switchMember(i)
+
+            if (saved.currentArea == areas.frontierBattleFactory.id) {
+            fatigueDamage = pkmn[ team[exploreActiveMember].pkmn.id ].playerHpMax/15
+            pkmn[ team[exploreActiveMember].pkmn.id ].playerHp -= fatigueDamage
+            updateTeamPkmn()
+            }
         
         
         
