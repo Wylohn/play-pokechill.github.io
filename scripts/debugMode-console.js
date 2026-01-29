@@ -572,6 +572,68 @@
       transform: scale(0.95);
     }
 
+    /* Toast notifications */
+    .debug-toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 15px 20px;
+      background: var(--dark1);
+      border: 2px solid var(--light1);
+      border-radius: 8px;
+      color: var(--light2);
+      font-weight: bold;
+      z-index: 100001;
+      animation: slideInRight 0.3s ease-out;
+      box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5);
+    }
+
+    .debug-toast.success {
+      border-color: #27ae60;
+      background: linear-gradient(135deg, var(--dark1) 0%, rgba(39, 174, 96, 0.1) 100%);
+    }
+
+    .debug-toast.error {
+      border-color: #e74c3c;
+      background: linear-gradient(135deg, var(--dark1) 0%, rgba(231, 76, 60, 0.1) 100%);
+    }
+
+    .debug-toast.info {
+      border-color: #3498db;
+      background: linear-gradient(135deg, var(--dark1) 0%, rgba(52, 152, 219, 0.1) 100%);
+    }
+
+    @keyframes slideInRight {
+      from {
+        transform: translateX(400px);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+
+    /* Smooth content transitions */
+    #debug-content-container {
+      transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+    }
+
+    /* Loading spinner */
+    .debug-spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid var(--light1);
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
     @media (max-width: 768px) {
       #debug-panel-enhanced {
         width: 95%;
@@ -584,6 +646,12 @@
       
       .debug-actions {
         flex-direction: column;
+      }
+      
+      .debug-toast {
+        right: 10px;
+        left: 10px;
+        top: 10px;
       }
     }
   `;
@@ -611,9 +679,21 @@
           autoRepeatEnabled: false,
           autoRepeatCount: 0,
           stopOnShiny: false,
-          battleSpeed: 1
+          battleSpeed: 1,
+          lastTab: 'add',
+          searchFilters: {
+            typeFilter: 'all',
+            sortBy: 'name'
+          }
         };
       }
+      
+      // Restaurer le dernier onglet utilisé
+      this.currentTab = saved.debugSettings.lastTab || 'add';
+      
+      // Historique des actions pour undo (limité à 10)
+      this.actionHistory = [];
+      this.maxHistorySize = 10;
       
       this.autoRepeatEnabled = saved.debugSettings.autoRepeatEnabled || false;
       this.autoRepeatCount = saved.debugSettings.autoRepeatCount || 0;
@@ -627,6 +707,20 @@
       this.justRestarted = false;
       this.restartCooldown = 0;
       this.init();
+    }
+
+    // Toast notification system
+    showToast(message, type = 'info', duration = 3000) {
+      const toast = document.createElement('div');
+      toast.className = `debug-toast ${type}`;
+      toast.textContent = message;
+      document.body.appendChild(toast);
+      
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateX(400px)';
+        setTimeout(() => toast.remove(), 300);
+      }, duration);
     }
 
     init() {
@@ -646,11 +740,43 @@
 
     registerShortcuts() {
       document.addEventListener('keydown', (e) => {
+        // Ctrl+D: Toggle debug panel
         if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
           e.preventDefault();
           this.toggle();
         }
+        
+        // Only if panel is open
+        if (!this.isOpen) return;
+        
+        // ESC: Close panel
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          this.toggle();
+        }
+        
+        // Ctrl+1-4: Switch tabs
+        if (e.ctrlKey && ['1', '2', '3', '4'].includes(e.key)) {
+          e.preventDefault();
+          const tabs = ['add', 'edit', 'quick', 'stats'];
+          this.switchTab(tabs[parseInt(e.key) - 1]);
+        }
+        
+        // Ctrl+F: Focus search (if in add or edit tab)
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f' && (this.currentTab === 'add' || this.currentTab === 'edit')) {
+          e.preventDefault();
+          const searchInput = document.getElementById(this.currentTab === 'add' ? 'debug-pokemon-search' : 'debug-edit-pokemon-select');
+          if (searchInput) searchInput.focus();
+        }
+        
+        // Ctrl+S: Save changes (if in edit tab)
+        if ((e.ctrlKey || e.metaKey) && e.key === 's' && this.currentTab === 'edit' && this.editingPokemon) {
+          e.preventDefault();
+          this.savePokemonChanges();
+        }
       });
+      
+      console.log('⌨️ Keyboard shortcuts enabled: Ctrl+D (toggle), ESC (close), Ctrl+1-4 (tabs), Ctrl+F (search), Ctrl+S (save)');
     }
 
     createToggleButton() {
@@ -659,7 +785,7 @@
         toggleBtn = document.createElement('button');
         toggleBtn.id = 'debug-toggle-button';
         toggleBtn.textContent = '🔧';
-        toggleBtn.title = 'Toggle Debug Mode (Ctrl+D)';
+        toggleBtn.title = 'Debug Mode (Ctrl+D)\n\nShortcuts:\n• Ctrl+D: Toggle panel\n• ESC: Close\n• Ctrl+1-4: Switch tabs\n• Ctrl+F: Search\n• Ctrl+S: Save changes';
         toggleBtn.addEventListener('click', () => this.toggle());
         document.body.appendChild(toggleBtn);
       }
@@ -676,9 +802,14 @@
       this.notificationContainer = container;
     }
 
-    showNotification(type, title, message, iconPath = null, duration = 5000) {
+    showNotification(type, title, message, iconPath = null, duration = 5000, onClick = null) {
       const notification = document.createElement('div');
       notification.className = `notification notification-${type}`;
+      
+      // Add click cursor if onClick provided
+      if (onClick) {
+        notification.style.cursor = 'pointer';
+      }
       
       // Create icon if provided
       let iconHTML = '';
@@ -690,14 +821,23 @@
         ${iconHTML}
         <div class="notification-content">
           <div class="notification-title">${title}</div>
-          <div class="notification-message">${message}</div>
+          <div class="notification-message">${message}${onClick ? '<br><small style="opacity: 0.8;">📌 Click to view</small>' : ''}</div>
         </div>
         <button class="notification-close" onclick="this.parentElement.remove()">×</button>
       `;
       
-      // Click to dismiss
+      // Click handler
       notification.addEventListener('click', (e) => {
-        if (!e.target.classList.contains('notification-close')) {
+        if (e.target.classList.contains('notification-close')) {
+          return; // Don't trigger onClick when closing
+        }
+        
+        if (onClick) {
+          onClick();
+          notification.classList.add('removing');
+          setTimeout(() => notification.remove(), 300);
+        } else {
+          // Just dismiss if no onClick
           notification.classList.add('removing');
           setTimeout(() => notification.remove(), 300);
         }
@@ -722,7 +862,13 @@
         '✨ Shiny Trouvé!',
         `${format(pokemonId)} est shiny!`,
         iconPath,
-        0
+        0,
+        () => {
+          // Open Pokemon editor page
+          if (typeof tooltipData === 'function') {
+            tooltipData("pkmnEditor", pokemonId);
+          }
+        }
       );
     }
 
@@ -735,7 +881,13 @@
         '🆕 Nouveau Pokémon!',
         `${format(pokemonId)} ajouté au Pokédex!`,
         iconPath,
-        0
+        0,
+        () => {
+          // Open Pokemon editor page
+          if (typeof tooltipData === 'function') {
+            tooltipData("pkmnEditor", pokemonId);
+          }
+        }
       );
     }
 
@@ -818,17 +970,18 @@
       tabsContainer.className = 'debug-tabs';
       
       const tabs = [
-        { id: 'add', label: 'Add New Pokemon' },
-        { id: 'edit', label: 'Edit Pokemon' },
-        { id: 'quick', label: 'Quick Actions' },
-        { id: 'stats', label: 'Stats' }
+        { id: 'add', label: '➕ Add New', shortcut: 'Ctrl+1' },
+        { id: 'edit', label: '✏️ Edit', shortcut: 'Ctrl+2' },
+        { id: 'quick', label: '⚡ Actions', shortcut: 'Ctrl+3' },
+        { id: 'stats', label: '📊 Stats', shortcut: 'Ctrl+4' }
       ];
       
-      tabs.forEach(tab => {
+      tabs.forEach((tab, index) => {
         const button = document.createElement('button');
-        button.className = `debug-tab ${tab.id === 'add' ? 'active' : ''}`;
+        button.className = `debug-tab ${tab.id === this.currentTab ? 'active' : ''}`;
         button.dataset.tab = tab.id;
-        button.textContent = tab.label;
+        button.innerHTML = `${tab.label}<br><small style="font-size: 9px; opacity: 0.7;">${tab.shortcut}</small>`;
+        button.title = `${tab.label} (${tab.shortcut})`;
         button.addEventListener('click', () => this.switchTab(tab.id));
         tabsContainer.appendChild(button);
       });
@@ -844,37 +997,81 @@
       
       // Update content
       this.currentTab = tabId;
-      const container = document.getElementById('debug-content-container');
-      container.innerHTML = '';
       
-      // Render the selected tab
-      switch(tabId) {
-        case 'add':
-          container.appendChild(this.renderAddPokemonTab());
-          this.initAddPokemonTab();
-          break;
-        case 'edit':
-          container.appendChild(this.renderEditPokemonTab());
-          this.initEditPokemonTab();
-          break;
-        case 'quick':
-          container.appendChild(this.renderQuickActionsTab());
-          this.initQuickActionsTab();
-          break;
-        case 'stats':
-          container.appendChild(this.renderStatsTab());
-          this.updateStats();
-          break;
-      }
+      // Save last used tab
+      saved.debugSettings.lastTab = tabId;
+      saveGame();
+      
+      const container = document.getElementById('debug-content-container');
+      
+      // Fade out animation
+      container.style.opacity = '0';
+      container.style.transform = 'translateY(10px)';
+      
+      setTimeout(() => {
+        container.innerHTML = '';
+        
+        // Render the selected tab
+        switch(tabId) {
+          case 'add':
+            container.appendChild(this.renderAddPokemonTab());
+            this.initAddPokemonTab();
+            break;
+          case 'edit':
+            container.appendChild(this.renderEditPokemonTab());
+            this.initEditPokemonTab();
+            break;
+          case 'quick':
+            container.appendChild(this.renderQuickActionsTab());
+            this.initQuickActionsTab();
+            break;
+          case 'stats':
+            container.appendChild(this.renderStatsTab());
+            this.updateStats();
+            break;
+        }
+        
+        // Fade in animation
+        container.style.opacity = '1';
+        container.style.transform = 'translateY(0)';
+      }, 150);
     }
 
     renderAddPokemonTab() {
       const tab = document.createElement('div');
       tab.innerHTML = `
         <div class="debug-section">
-          <label>Select Pokemon</label>
+          <label>🔍 Search Pokemon (Ctrl+F)</label>
           <div class="debug-search-container">
-            <input type="text" id="debug-pokemon-search" placeholder="Search Pokemon..." />
+            <input type="text" id="debug-pokemon-search" placeholder="Type to search uncaught Pokemon..." />
+            <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
+              <select id="debug-type-filter" style="padding: 8px; background: var(--dark1); border: 2px solid var(--light1); border-radius: 5px; color: var(--light2); cursor: pointer;" title="Filter by type">
+                <option value="all">🔸 All Types</option>
+                <option value="normal">Normal</option>
+                <option value="fire">🔥 Fire</option>
+                <option value="water">💧 Water</option>
+                <option value="grass">🌿 Grass</option>
+                <option value="electric">⚡ Electric</option>
+                <option value="ice">❄️ Ice</option>
+                <option value="fighting">🥊 Fighting</option>
+                <option value="poison">☠️ Poison</option>
+                <option value="ground">⛰️ Ground</option>
+                <option value="flying">🦅 Flying</option>
+                <option value="psychic">🔮 Psychic</option>
+                <option value="bug">🐛 Bug</option>
+                <option value="rock">🪨 Rock</option>
+                <option value="ghost">👻 Ghost</option>
+                <option value="dragon">🐉 Dragon</option>
+                <option value="dark">🌙 Dark</option>
+                <option value="steel">⚙️ Steel</option>
+                <option value="fairy">✨ Fairy</option>
+              </select>
+              <select id="debug-sort-by" style="padding: 8px; background: var(--dark1); border: 2px solid var(--light1); border-radius: 5px; color: var(--light2); cursor: pointer;" title="Sort results">
+                <option value="name">Sort by Name</option>
+                <option value="type">Sort by Type</option>
+              </select>
+              <button id="debug-random-pokemon" class="debug-btn-small" style="margin: 0; padding: 8px 15px;" title="Select a random uncaught Pokemon">🎲 Random</button>
+            </div>
             <div id="debug-pokemon-list" class="debug-list"></div>
           </div>
         </div>
@@ -927,8 +1124,16 @@
           </div>
 
           <div class="debug-actions">
-            <button id="debug-add-pokemon" class="debug-btn-primary">Add to Pokedex</button>
-            <button id="debug-add-to-team" class="debug-btn-secondary">Add to Current Team</button>
+            <button id="debug-add-pokemon" class="debug-btn-primary" title="Add this Pokemon to your Pokedex">✓ Add to Pokedex</button>
+            <button id="debug-add-to-team" class="debug-btn-secondary" title="Add to Pokedex and equip to first empty team slot">👥 Add to Team</button>
+          </div>
+          <div style="margin-top: 10px; padding: 10px; background: var(--dark2); border-radius: 5px; font-size: 12px; color: var(--light1);">
+            <strong>💡 Tips:</strong>
+            <ul style="margin: 5px 0 0 20px; padding: 0;">
+              <li>Use filters to find Pokemon by type</li>
+              <li>Click 🎲 Random for a surprise</li>
+              <li>Press Enter in search to select first result</li>
+            </ul>
           </div>
         </div>
       `;
@@ -939,10 +1144,18 @@
       const tab = document.createElement('div');
       tab.innerHTML = `
         <div class="debug-section">
-          <label>Select Pokemon to Edit</label>
-          <select id="debug-edit-pokemon-select" style="width: 100%; padding: 10px; background: var(--dark1); border: 2px solid var(--light1); border-radius: 5px; color: var(--light2);">
-            <option value="">-- Select a Pokemon --</option>
-          </select>
+          <label>🔍 Select Pokemon to Edit (Ctrl+F)</label>
+          <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+            <select id="debug-edit-pokemon-select" style="flex: 1; padding: 10px; background: var(--dark1); border: 2px solid var(--light1); border-radius: 5px; color: var(--light2); cursor: pointer;">
+              <option value="">-- Select a Pokemon --</option>
+            </select>
+            <select id="debug-edit-filter" style="flex: 0.1;padding: 10px; background: var(--dark1); border: 2px solid var(--light1); border-radius: 5px; color: var(--light2); cursor: pointer;" title="Filter caught Pokemon">
+              <option value="all">All</option>
+              <option value="shiny">✨ Shiny Only</option>
+              <option value="max-level">⬆️ Max Level</option>
+              <option value="team">👥 In Team</option>
+            </select>
+          </div>
         </div>
 
         <div id="debug-edit-pokemon-editor" style="display: none;">
@@ -1001,7 +1214,15 @@
           </div>
 
           <div class="debug-actions">
-            <button id="debug-save-pokemon" class="debug-btn-action">💾 Save Changes</button>
+            <button id="debug-save-pokemon" class="debug-btn-primary" title="Save all changes (Ctrl+S)">💾 Save Changes</button>
+          </div>
+          <div style="margin-top: 10px; padding: 10px; background: var(--dark2); border-radius: 5px; font-size: 12px; color: var(--light1);">
+            <strong>💡 Quick Tips:</strong>
+            <ul style="margin: 5px 0 0 20px; padding: 0;">
+              <li>Press Ctrl+S to save changes</li>
+              <li>Use filters to find specific Pokemon</li>
+              <li>Click moves to equip/unequip them</li>
+            </ul>
           </div>
         </div>
       `;
@@ -1012,58 +1233,73 @@
       const tab = document.createElement('div');
       tab.innerHTML = `
         <div class="debug-section">
-          <h3>Battle Settings</h3>
-          <div style="margin-bottom: 15px;">
-            <label><input type="checkbox" id="debug-auto-repeat" /> Auto Repeat Battles</label>
-            <div style="margin-top: 10px;">
-              <label>Battle Count (0 = infinite):</label>
-              <input type="number" id="debug-repeat-count" min="0" value="0" style="width: 100%; padding: 8px; background: var(--dark1); border: 2px solid var(--light1); border-radius: 5px; color: var(--light2);" />
+          <h3>⚔️ Battle Automation</h3>
+          <div style="margin-bottom: 15px; padding: 15px; background: var(--dark1); border-radius: 8px; border: 2px solid var(--light1);">
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+              <input type="checkbox" id="debug-auto-repeat" style="width: 20px; height: 20px; cursor: pointer;" />
+              <label for="debug-auto-repeat" style="cursor: pointer; font-weight: bold; color: var(--light2);">🔄 Auto Repeat Battles</label>
             </div>
-            <div style="margin-top: 10px;">
-              <label><input type="checkbox" id="debug-stop-on-shiny" /> Stop on Shiny Detected</label>
+            <div style="margin: 10px 0;">
+              <label style="display: block; margin-bottom: 5px;">Battle Count (0 = infinite):</label>
+              <input type="number" id="debug-repeat-count" min="0" value="0" style="width: 100%; padding: 8px; background: var(--dark2); border: 2px solid var(--light1); border-radius: 5px; color: var(--light2);" />
             </div>
-            <div style="margin-top: 10px; padding: 10px; background: var(--dark2); border-radius: 5px;">
-              <div>Status: <span id="debug-repeat-status">Stopped</span></div>
-              <div>Battles: <span id="debug-repeat-counter">0</span></div>
+            <div style="margin: 10px 0;">
+              <input type="checkbox" id="debug-stop-on-shiny" style="width: 18px; height: 18px; cursor: pointer;" />
+              <label for="debug-stop-on-shiny" style="cursor: pointer;">✨ Stop on Shiny Detected</label>
+            </div>
+            <div style="margin-top: 15px; padding: 12px; background: var(--dark2); border-radius: 5px; border-left: 4px solid var(--accent);">
+              <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                <strong>Status:</strong> 
+                <span id="debug-repeat-status" style="font-weight: bold;">Stopped</span>
+              </div>
+              <div style="display: flex; justify-content: space-between;">
+                <strong>Battles:</strong> 
+                <span id="debug-repeat-counter" style="font-weight: bold; color: var(--accent);">0</span>
+              </div>
             </div>
           </div>
-          <div style="margin-bottom: 15px;">
-            <label>Battle Speed Multiplier (0.1 - 100):</label>
+          <div style="margin-bottom: 15px; padding: 15px; background: var(--dark1); border-radius: 8px; border: 2px solid var(--light1);">
+            <label style="display: block; margin-bottom: 8px; font-weight: bold;">⚡ Battle Speed Multiplier (0.1 - 1000):</label>
             <div style="display: flex; gap: 10px; align-items: center;">
-              <input type="number" id="debug-battle-speed" min="0.1" max="100" step="0.1" value="1" style="flex: 1; padding: 8px; background: var(--dark1); border: 2px solid var(--light1); border-radius: 5px; color: var(--light2);" />
-              <button id="debug-apply-speed" class="debug-btn-action" style="max-width: 80px; padding: 8px 20px; white-space: nowrap;">Apply</button>
+              <input type="number" id="debug-battle-speed" min="0.1" max="1000" step="0.1" value="1" style="flex: 1; padding: 10px; background: var(--dark2); border: 2px solid var(--light1); border-radius: 5px; color: var(--light2);" />
+              <button id="debug-apply-speed" class="debug-btn-small" style="margin: 0; padding: 10px 20px; white-space: nowrap;">✓ Apply</button>
             </div>
-            <div style="text-align: center; color: var(--light2); margin-top: 5px;">Current: <span id="debug-speed-value">1x</span></div>
+            <div style="text-align: center; color: var(--light2); margin-top: 8px; font-size: 14px;">
+              Current Speed: <strong id="debug-speed-value" style="color: var(--accent); font-size: 16px;">1x</strong>
+            </div>
+            <div style="margin-top: 10px; font-size: 11px; color: var(--light1); opacity: 0.8;">
+              💡 Tip: Higher values = faster battles. Try 10x for quick farming!
+            </div>
           </div>
-          <button class="debug-btn-action" onclick="window.debugMode.toggleGodMode()">Toggle God Mode</button>
+          <button class="debug-btn-action" onclick="window.debugMode.toggleGodMode()">🛡️ Toggle God Mode</button>
         </div>
 
         <div class="debug-section">
-          <h3>Pokemon Actions</h3>
-          <button class="debug-btn-action" onclick="window.debugMode.giveAllPokemon()">Give All Pokemon (Level 50)</button>
-          <button class="debug-btn-action" onclick="window.debugMode.maxAllLevels()">Max All Caught Pokemon Levels</button>
-          <button class="debug-btn-action" onclick="window.debugMode.shinyAllPokemon()">Make All Caught Pokemon Shiny</button>
-          <button class="debug-btn-action" onclick="window.debugMode.maxAllIVs()">Max All Pokemon IVs</button>
+          <h3>🎮 Pokemon Actions</h3>
+          <button class="debug-btn-action" onclick="window.debugMode.giveAllPokemon()">🎁 Give All Pokemon (Level 50)</button>
+          <button class="debug-btn-action" onclick="window.debugMode.maxAllLevels()">⬆️ Max All Caught Pokemon Levels</button>
+          <button class="debug-btn-action" onclick="window.debugMode.shinyAllPokemon()">✨ Make All Caught Pokemon Shiny</button>
+          <button class="debug-btn-action" onclick="window.debugMode.maxAllIVs()">💪 Max All Pokemon IVs</button>
         </div>
 
         <div class="debug-section">
-          <h3>Items</h3>
-          <button class="debug-btn-action" onclick="window.debugMode.giveAllItems()">Give All Items (x999)</button>
-          <button class="debug-btn-action" onclick="window.debugMode.giveBottleCaps()">Give Bottle Caps (x100)</button>
-          <button class="debug-btn-action" onclick="window.debugMode.giveGoldenBottleCaps()">Give Golden Bottle Caps (x50)</button>
+          <h3>🎒 Items</h3>
+          <button class="debug-btn-action" onclick="window.debugMode.giveAllItems()">📦 Give All Items (x999)</button>
+          <button class="debug-btn-action" onclick="window.debugMode.giveBottleCaps()">🍾 Give Bottle Caps (x100)</button>
+          <button class="debug-btn-action" onclick="window.debugMode.giveGoldenBottleCaps()">👑 Give Golden Bottle Caps (x50)</button>
         </div>
 
         <div class="debug-section">
-          <h3>Areas</h3>
-          <button class="debug-btn-action" onclick="window.debugMode.unlockAllAreas()">Unlock All Areas</button>
-          <button class="debug-btn-action" onclick="window.debugMode.resetAllAreas()">Reset All Areas</button>
+          <h3>🗺️ Areas</h3>
+          <button class="debug-btn-action" onclick="window.debugMode.unlockAllAreas()">🔓 Unlock All Areas</button>
+          <button class="debug-btn-action" onclick="window.debugMode.resetAllAreas()">🔄 Reset All Areas</button>
         </div>
 
         <div class="debug-section">
-          <h3>Save</h3>
-          <button class="debug-btn-action" onclick="window.debugMode.exportSave()">Export Save</button>
-          <button class="debug-btn-action" onclick="window.debugMode.importSave()">Import Save</button>
-          <button class="debug-btn-action" onclick="window.debugMode.resetSave()">Reset Save (Warning!)</button>
+          <h3>💾 Save Management</h3>
+          <button class="debug-btn-action" onclick="window.debugMode.exportSave()">⬇️ Export Save</button>
+          <button class="debug-btn-action" onclick="window.debugMode.importSave()">⬆️ Import Save</button>
+          <button class="debug-btn-action" onclick="window.debugMode.resetSave()" style="background: #e74c3c;">⚠️ Reset Save (Warning!)</button>
         </div>
 
         <div class="debug-section">
@@ -1079,18 +1315,41 @@
       const tab = document.createElement('div');
       tab.innerHTML = `
         <div class="debug-section">
-          <h3>Game Statistics</h3>
+          <h3>📊 Game Statistics</h3>
+          <button id="debug-refresh-stats" class="debug-btn-small" style="margin-bottom: 10px;">🔄 Refresh Stats</button>
           <div id="debug-game-stats"></div>
         </div>
         
         <div class="debug-section">
-          <h3>Console Commands</h3>
+          <h3>⌨️ Console Commands</h3>
           <div class="debug-console-help">
+            <div style="margin-bottom: 15px;">
+              <strong style="color: var(--accent);">Quick Reference:</strong>
+            </div>
             <code>debugMode.givePkmn(pkmn.NAME, level, shiny)</code>
             <code>debugMode.addMove(pokemonId, moveId)</code>
             <code>debugMode.setLevel(pokemonId, level)</code>
             <code>debugMode.setShiny(pokemonId, true/false)</code>
             <code>debugMode.setIVs(pokemonId, {hp:6, atk:6, ...})</code>
+            <div style="margin-top: 15px; padding: 10px; background: var(--dark2); border-radius: 5px; font-size: 11px;">
+              <strong>💡 Example:</strong><br>
+              <span style="color: #0f0;">debugMode.givePkmn(pkmn.pikachu, 50, true)</span><br>
+              <span style="opacity: 0.7;">// Gives a level 50 shiny Pikachu</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="debug-section">
+          <h3>⌨️ Keyboard Shortcuts</h3>
+          <div style="padding: 10px; background: var(--dark2); border-radius: 5px; font-size: 12px;">
+            <div style="display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center;">
+              <strong>Ctrl+D</strong><span>Toggle Debug Panel</span>
+              <strong>ESC</strong><span>Close Panel</span>
+              <strong>Ctrl+1-4</strong><span>Switch Tabs</span>
+              <strong>Ctrl+F</strong><span>Focus Search</span>
+              <strong>Ctrl+S</strong><span>Save Changes (Edit tab)</span>
+              <strong>Enter</strong><span>Select First Result (Add tab)</span>
+            </div>
           </div>
         </div>
       `;
@@ -1098,9 +1357,45 @@
     }
 
     initAddPokemonTab() {
-      document.getElementById('debug-pokemon-search').addEventListener('input', (e) => {
-        this.searchPokemon(e.target.value);
+      const searchInput = document.getElementById('debug-pokemon-search');
+      const typeFilter = document.getElementById('debug-type-filter');
+      const sortBy = document.getElementById('debug-sort-by');
+      const randomBtn = document.getElementById('debug-random-pokemon');
+      
+      // Restore saved filters
+      if (saved.debugSettings.searchFilters) {
+        typeFilter.value = saved.debugSettings.searchFilters.typeFilter || 'all';
+        sortBy.value = saved.debugSettings.searchFilters.sortBy || 'name';
+      }
+      
+      // Search with debounce
+      let searchTimeout;
+      searchInput.addEventListener('input', (e) => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => this.searchPokemon(e.target.value), 200);
       });
+      
+      // Enter key to select first result
+      searchInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          const firstItem = document.querySelector('.debug-list-item');
+          if (firstItem) firstItem.click();
+        }
+      });
+      
+      typeFilter.addEventListener('change', (e) => {
+        saved.debugSettings.searchFilters.typeFilter = e.target.value;
+        saveGame();
+        this.searchPokemon(searchInput.value);
+      });
+      
+      sortBy.addEventListener('change', (e) => {
+        saved.debugSettings.searchFilters.sortBy = e.target.value;
+        saveGame();
+        this.searchPokemon(searchInput.value);
+      });
+      
+      randomBtn.addEventListener('click', () => this.selectRandomPokemon());
 
       document.getElementById('debug-move-search').addEventListener('input', (e) => {
         this.searchMoves(e.target.value);
@@ -1110,6 +1405,7 @@
         ['hp', 'atk', 'def', 'satk', 'sdef', 'spe'].forEach(stat => {
           document.getElementById(`debug-iv-${stat}`).value = 6;
         });
+        this.showToast('✓ All IVs set to maximum', 'success');
       });
 
       document.getElementById('debug-add-pokemon').addEventListener('click', () => this.addPokemon(false));
@@ -1119,7 +1415,16 @@
     }
 
     initEditPokemonTab() {
+      const editFilter = document.getElementById('debug-edit-filter');
+      
       this.populateEditPokemonList();
+
+      // Filter change handler
+      if (editFilter) {
+        editFilter.addEventListener('change', () => {
+          this.populateEditPokemonList();
+        });
+      }
 
       document.getElementById('debug-edit-pokemon-select').addEventListener('change', (e) => {
         this.loadPokemonForEdit(e.target.value);
@@ -1133,6 +1438,7 @@
         ['hp', 'atk', 'def', 'satk', 'sdef', 'spe'].forEach(stat => {
           document.getElementById(`debug-edit-iv-${stat}`).value = 6;
         });
+        this.showToast('✓ All IVs set to maximum', 'success');
       });
 
       document.getElementById('debug-save-pokemon').addEventListener('click', () => this.savePokemonChanges());
@@ -1203,7 +1509,7 @@
         const applySpeed = () => {
           let speed = parseFloat(speedInput.value);
           if (isNaN(speed) || speed < 0.1) speed = 0.1;
-          if (speed > 100) speed = 100;
+          if (speed > 1000) speed = 1000;
           speedInput.value = speed.toFixed(1);
           document.getElementById('debug-speed-value').textContent = speed.toFixed(1) + 'x';
           saved.overrideBattleTimer = 2000 / speed;
@@ -1225,22 +1531,53 @@
     toggle() {
       this.isOpen = !this.isOpen;
       this.panel.style.display = this.isOpen ? 'flex' : 'none';
-      if (this.isOpen) this.switchTab(this.currentTab);
+      
+      if (this.isOpen) {
+        this.switchTab(this.currentTab);
+        // Focus search input if on add tab
+        setTimeout(() => {
+          if (this.currentTab === 'add') {
+            const searchInput = document.getElementById('debug-pokemon-search');
+            if (searchInput) searchInput.focus();
+          }
+        }, 200);
+      }
     }
 
     searchPokemon(query) {
       const list = document.getElementById('debug-pokemon-list');
       list.innerHTML = '';
       
+      const typeFilter = document.getElementById('debug-type-filter')?.value || 'all';
+      const sortBy = document.getElementById('debug-sort-by')?.value || 'name';
+      
       // Filter only uncaught Pokemon
-      const filtered = Object.keys(pkmn).filter(id => {
+      let filtered = Object.keys(pkmn).filter(id => {
         // Skip if already caught
         if (pkmn[id].caught && pkmn[id].caught > 0) return false;
         
+        // Type filter
+        if (typeFilter !== 'all' && !pkmn[id].type.includes(typeFilter)) return false;
+        
+        // Search query
         if (!query) return true;
         return format(id).toLowerCase().includes(query.toLowerCase()) || 
                id.toLowerCase().includes(query.toLowerCase());
-      }).slice(0, 50);
+      });
+      
+      // Sort results
+      if (sortBy === 'name') {
+        filtered.sort((a, b) => format(a).localeCompare(format(b)));
+      } else if (sortBy === 'type') {
+        filtered.sort((a, b) => {
+          const typeA = pkmn[a].type[0];
+          const typeB = pkmn[b].type[0];
+          return typeA.localeCompare(typeB);
+        });
+      }
+      
+      // Limit to 50 results
+      filtered = filtered.slice(0, 50);
 
       if (filtered.length === 0) {
         list.innerHTML = '<div class="debug-info">No uncaught Pokemon found. Use "Edit Pokemon" tab to modify caught ones.</div>';
@@ -1250,13 +1587,39 @@
       filtered.forEach(id => {
         const div = document.createElement('div');
         div.className = 'debug-list-item';
+        const types = pkmn[id].type.map(t => `<span style="background: ${returnTypeColor(t)}; padding: 2px 6px; border-radius: 3px; font-size: 10px; color: white;">${t.toUpperCase()}</span>`).join(' ');
         div.innerHTML = `
           <img src="img/pkmn/sprite/${id}.png" alt="${format(id)}" style="image-rendering: pixelated;" />
-          <span>${format(id)}</span>
+          <div style="flex: 1;">
+            <div>${format(id)}</div>
+            <div style="margin-top: 4px;">${types}</div>
+          </div>
         `;
         div.addEventListener('click', () => this.selectPokemon(id));
         list.appendChild(div);
       });
+      
+      // Show count
+      const countDiv = document.createElement('div');
+      countDiv.className = 'debug-info';
+      countDiv.style.fontSize = '11px';
+      countDiv.textContent = `Showing ${filtered.length} Pokemon${filtered.length === 50 ? ' (max)' : ''}`;
+      list.appendChild(countDiv);
+    }
+
+    selectRandomPokemon() {
+      const uncaught = Object.keys(pkmn).filter(id => !pkmn[id].caught || pkmn[id].caught === 0);
+      if (uncaught.length === 0) {
+        this.showToast('❌ No uncaught Pokemon available!', 'error');
+        return;
+      }
+      const randomId = uncaught[Math.floor(Math.random() * uncaught.length)];
+      this.selectPokemon(randomId);
+      this.showToast(`🎲 Selected ${format(randomId)}!`, 'info');
+      
+      // Scroll to show the selected Pokemon
+      const editor = document.getElementById('debug-pokemon-editor');
+      if (editor) editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
     selectPokemon(id) {
@@ -1385,7 +1748,7 @@
 
     addPokemon(addToTeam = false) {
       if (!this.selectedPokemon) {
-        alert('Please select a Pokemon first!');
+        this.showToast('⚠️ Please select a Pokemon first!', 'error');
         return;
       }
 
@@ -1448,13 +1811,18 @@
 
       pokemon.exp = pokemon.exp || 0;
 
+      let teamAdded = false;
       if (addToTeam) {
         for (let i = 1; i <= 6; i++) {
           const slot = `slot${i}`;
           if (!team[slot].pkmn) {
             team[slot].pkmn = pokemon;
+            teamAdded = true;
             break;
           }
+        }
+        if (!teamAdded) {
+          this.showToast('⚠️ Team is full! Pokemon added to Pokedex only.', 'info', 4000);
         }
       }
 
@@ -1470,79 +1838,129 @@
         this.notifyNewPokemon(this.selectedPokemon);
       }
 
-      alert(`${format(this.selectedPokemon)} added!\nLevel: ${level}\nShiny: ${isShiny}`);
+      const message = `✅ ${format(this.selectedPokemon)} added!
+Level: ${level}${isShiny ? ' ✨ (Shiny)' : ''}
+IVs: ${ivs.hp}/${ivs.atk}/${ivs.def}/${ivs.satk}/${ivs.sdef}/${ivs.spe}${teamAdded ? '\n👥 Added to team!' : ''}`;
+      
+      this.showToast(message, 'success', 4000);
+      
+      // Reset form
+      document.getElementById('debug-pokemon-editor').style.display = 'none';
+      this.selectedPokemon = null;
+      this.selectedMoves = [];
+      document.getElementById('debug-pokemon-search').value = '';
+      this.searchPokemon('');
     }
 
     giveAllPokemon() {
-      if (!confirm('Give all Pokemon at level 50?')) return;
-      Object.keys(pkmn).forEach(id => givePkmn(pkmn[id], 50));
+      if (!confirm('🎁 Give all Pokemon at level 50?\n\nThis will add all Pokemon to your Pokedex.')) return;
+      
+      let count = 0;
+      Object.keys(pkmn).forEach(id => {
+        if (!pkmn[id].caught || pkmn[id].caught === 0) {
+          givePkmn(pkmn[id], 50);
+          count++;
+        }
+      });
+      
       updatePokedex();
       saveGame();
-      alert('All Pokemon added!');
+      this.showToast(`✅ ${count} Pokemon added to Pokedex!`, 'success', 4000);
     }
 
     maxAllLevels() {
-      if (!confirm('Set all caught Pokemon to level 100?')) return;
-      Object.values(pkmn).forEach(p => { if (p.caught > 0) p.level = 100; });
+      if (!confirm('⬆️ Set all caught Pokemon to level 100?\n\nThis will maximize the level of all your Pokemon.')) return;
+      
+      let count = 0;
+      Object.values(pkmn).forEach(p => { 
+        if (p.caught > 0) {
+          p.level = 100;
+          count++;
+        }
+      });
+      
       updatePokedex();
       updatePreviewTeam();
       saveGame();
-      alert('All caught Pokemon set to level 100!');
+      this.showToast(`✅ ${count} Pokemon set to level 100!`, 'success', 4000);
     }
 
     shinyAllPokemon() {
-      if (!confirm('Make all caught Pokemon shiny?')) return;
-      Object.values(pkmn).forEach(p => { if (p.caught > 0) p.shiny = true; });
+      if (!confirm('✨ Make all caught Pokemon shiny?\n\nThis will make all your Pokemon sparkle!')) return;
+      
+      let count = 0;
+      Object.values(pkmn).forEach(p => { 
+        if (p.caught > 0 && !p.shiny) {
+          p.shiny = true;
+          count++;
+        }
+      });
+      
       updatePokedex();
       updatePreviewTeam();
       saveGame();
-      alert('All caught Pokemon are now shiny!');
+      this.showToast(`✨ ${count} Pokemon are now shiny!`, 'success', 4000);
     }
 
     maxAllIVs() {
-      if (!confirm('Set all caught Pokemon IVs to 6?')) return;
+      if (!confirm('💪 Set all caught Pokemon IVs to 6?\n\nThis will maximize all Individual Values.')) return;
+      
+      let count = 0;
       Object.values(pkmn).forEach(p => {
         if (p.caught > 0) {
           p.ivs = { hp: 6, atk: 6, def: 6, satk: 6, sdef: 6, spe: 6 };
+          count++;
         }
       });
+      
       updatePokedex();
       updatePreviewTeam();
       saveGame();
-      alert('All caught Pokemon IVs maxed!');
+      this.showToast(`💪 ${count} Pokemon IVs maxed!`, 'success', 4000);
     }
 
     giveAllItems() {
-      if (!confirm('Give all items (x999)?')) return;
+      if (!confirm('🎒 Give all items (x999)?\n\nThis will fill your bag with all items.')) return;
+      
       Object.values(item).forEach(itm => itm.got = 999);
       saveGame();
-      alert('All items given!');
+      this.showToast('🎒 All items added (x999)!', 'success', 4000);
     }
 
     giveBottleCaps() {
       item.bottleCap.got += 100;
       saveGame();
-      alert('100 Bottle Caps added!');
+      this.showToast('🍾 +100 Bottle Caps added!', 'success');
     }
 
     giveGoldenBottleCaps() {
       item.goldenBottleCap.got += 50;
       saveGame();
-      alert('50 Golden Bottle Caps added!');
+      this.showToast('👑 +50 Golden Bottle Caps added!', 'success');
     }
 
     unlockAllAreas() {
-      if (!confirm('Unlock all areas?')) return;
-      Object.values(areas).forEach(area => area.defeated = true);
+      if (!confirm('🗺️ Unlock all areas?\n\nThis will allow you to explore everywhere.')) return;
+      
+      let count = 0;
+      Object.values(areas).forEach(area => {
+        if (!area.defeated) {
+          area.defeated = true;
+          count++;
+        }
+      });
+      
       saveGame();
-      alert('All areas unlocked!');
+      this.showToast(`🗺️ ${count} areas unlocked!`, 'success', 4000);
     }
 
     resetAllAreas() {
-      if (!confirm('Reset all areas?')) return;
+      if (!confirm('🔄 Reset all areas?\n\n⚠️ This will lock all areas again!')) return;
+      if (!confirm('Are you absolutely sure? This cannot be undone easily.')) return;
+      
       Object.values(areas).forEach(area => area.defeated = false);
       saveGame();
-      alert('All areas reset!');
+      this.showToast('🔄 All areas have been reset!', 'info', 4000);
     }
 
     setBattleSpeed() {
@@ -1723,7 +2141,13 @@
       
       if (statusEl) {
         statusEl.textContent = status;
-        statusEl.style.color = status === 'Active' ? '#27ae60' : 'var(--light2)';
+        const colors = {
+          'Active': '#27ae60',
+          'In Battle': '#3498db',
+          'Waiting (3s)': '#f39c12',
+          'Stopped': 'var(--light2)'
+        };
+        statusEl.style.color = colors[status] || 'var(--light2)';
       }
       
       if (counterEl) {
@@ -1733,12 +2157,17 @@
 
     toggleGodMode() {
       window.godMode = !window.godMode;
-      alert(`God Mode: ${window.godMode ? 'ON' : 'OFF'}`);
+      const status = window.godMode ? 'ON 🛡️' : 'OFF';
+      this.showToast(`God Mode: ${status}`, window.godMode ? 'success' : 'info', 3000);
+      console.log(`🛡️ God Mode: ${status}`);
     }
 
     exportSave() {
       const data = localStorage.getItem('gameData');
-      if (!data) { alert('No save data found!'); return; }
+      if (!data) { 
+        this.showToast('❌ No save data found!', 'error'); 
+        return; 
+      }
       const blob = new Blob([data], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -1746,6 +2175,7 @@
       a.download = `pokechill_save_${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
+      this.showToast('💾 Save file downloaded!', 'success');
     }
 
     importSave() {
@@ -1754,14 +2184,16 @@
       input.accept = '.json';
       input.onchange = (e) => {
         const file = e.target.files[0];
+        if (!file) return;
+        
         const reader = new FileReader();
         reader.onload = (event) => {
           try {
             localStorage.setItem('gameData', event.target.result);
-            alert('Save imported! Reloading...');
-            location.reload();
+            this.showToast('✅ Save imported! Reloading...', 'success', 2000);
+            setTimeout(() => location.reload(), 2000);
           } catch (error) {
-            alert('Error: ' + error.message);
+            this.showToast(`❌ Error: ${error.message}`, 'error', 5000);
           }
         };
         reader.readAsText(file);
@@ -1770,11 +2202,12 @@
     }
 
     resetSave() {
-      if (!confirm('WARNING: Delete ALL progress?')) return;
-      if (!confirm('Last chance!')) return;
+      if (!confirm('⚠️ WARNING: Delete ALL progress?\n\nThis action cannot be undone!')) return;
+      if (!confirm('🚨 LAST CHANCE! Are you absolutely sure?\n\nAll your Pokemon, items, and progress will be lost forever.')) return;
+      
       localStorage.removeItem('gameData');
-      alert('Save deleted. Reloading...');
-      location.reload();
+      this.showToast('🗑️ Save deleted. Reloading...', 'info', 2000);
+      setTimeout(() => location.reload(), 2000);
     }
 
     updateStats() {
@@ -1790,30 +2223,100 @@
       const unlockedAreas = Object.values(areas).filter(a => a.defeated).length;
       const totalAreas = Object.values(areas).filter(a => a.type).length;
       
+      const completionPercent = ((caughtCount/totalPokemon)*100).toFixed(1);
+      const completionColor = completionPercent < 25 ? '#e74c3c' : completionPercent < 50 ? '#f39c12' : completionPercent < 75 ? '#3498db' : '#27ae60';
+      
       statsDiv.innerHTML = `
-        <div class="debug-stat-row"><span>Pokemon Caught:</span><strong>${caughtCount} / ${totalPokemon} (${((caughtCount/totalPokemon)*100).toFixed(1)}%)</strong></div>
-        <div class="debug-stat-row"><span>Shiny Pokemon:</span><strong>${shinyCount}</strong></div>
-        <div class="debug-stat-row"><span>Level 100 Pokemon:</span><strong>${maxLevelCount}</strong></div>
-        <div class="debug-stat-row"><span>Team Size:</span><strong>${teamSize} / 6</strong></div>
-        <div class="debug-stat-row"><span>Average Team Level:</span><strong>${avgTeamLevel.toFixed(1)}</strong></div>
-        <div class="debug-stat-row"><span>Areas Unlocked:</span><strong>${unlockedAreas} / ${totalAreas}</strong></div>
-        <div class="debug-stat-row"><span>Bottle Caps:</span><strong>${item.bottleCap?.got || 0}</strong></div>
-        <div class="debug-stat-row"><span>Golden Bottle Caps:</span><strong>${item.goldenBottleCap?.got || 0}</strong></div>
+        <div style="margin-bottom: 15px; padding: 15px; background: var(--dark2); border-radius: 8px; border-left: 4px solid ${completionColor};">
+          <div style="font-size: 14px; margin-bottom: 5px; color: var(--light1);">Pokedex Completion</div>
+          <div style="font-size: 28px; font-weight: bold; color: ${completionColor};">${completionPercent}%</div>
+          <div style="font-size: 12px; color: var(--light1); opacity: 0.8;">${caughtCount} / ${totalPokemon} Pokemon</div>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 15px;">
+          <div style="padding: 12px; background: var(--dark2); border-radius: 5px; text-align: center;">
+            <div style="font-size: 24px;">✨</div>
+            <div style="font-size: 20px; font-weight: bold; color: #FFD700;">${shinyCount}</div>
+            <div style="font-size: 11px; color: var(--light1);">Shiny Pokemon</div>
+          </div>
+          <div style="padding: 12px; background: var(--dark2); border-radius: 5px; text-align: center;">
+            <div style="font-size: 24px;">⬆️</div>
+            <div style="font-size: 20px; font-weight: bold; color: #27ae60;">${maxLevelCount}</div>
+            <div style="font-size: 11px; color: var(--light1);">Level 100</div>
+          </div>
+          <div style="padding: 12px; background: var(--dark2); border-radius: 5px; text-align: center;">
+            <div style="font-size: 24px;">👥</div>
+            <div style="font-size: 20px; font-weight: bold; color: #3498db;">${teamSize}/6</div>
+            <div style="font-size: 11px; color: var(--light1);">Team Size</div>
+          </div>
+          <div style="padding: 12px; background: var(--dark2); border-radius: 5px; text-align: center;">
+            <div style="font-size: 24px;">📈</div>
+            <div style="font-size: 20px; font-weight: bold; color: var(--accent);">${avgTeamLevel.toFixed(1)}</div>
+            <div style="font-size: 11px; color: var(--light1);">Avg Team Lvl</div>
+          </div>
+        </div>
+        
+        <div class="debug-stat-row"><span>🗺️ Areas Unlocked:</span><strong>${unlockedAreas} / ${totalAreas}</strong></div>
+        <div class="debug-stat-row"><span>🍾 Bottle Caps:</span><strong>${item.bottleCap?.got || 0}</strong></div>
+        <div class="debug-stat-row"><span>👑 Golden Bottle Caps:</span><strong>${item.goldenBottleCap?.got || 0}</strong></div>
       `;
+      
+      // Add refresh button handler
+      const refreshBtn = document.getElementById('debug-refresh-stats');
+      if (refreshBtn) {
+        refreshBtn.addEventListener('click', () => {
+          this.updateStats();
+          this.showToast('📊 Stats refreshed!', 'info', 2000);
+        });
+      }
     }
 
     populateEditPokemonList() {
       const select = document.getElementById('debug-edit-pokemon-select');
+      const filter = document.getElementById('debug-edit-filter')?.value || 'all';
+      
       select.innerHTML = '<option value="">-- Select a Pokemon --</option>';
       
-      Object.keys(pkmn).forEach(id => {
-        if (pkmn[id].caught && pkmn[id].caught > 0) {
-          const option = document.createElement('option');
-          option.value = id;
-          option.textContent = `${format(id)} (Lvl ${pkmn[id].level || 1}, Caught: ${pkmn[id].caught})`;
-          select.appendChild(option);
-        }
+      // Get team Pokemon IDs for filtering
+      const teamPokemonIds = Object.values(team)
+        .filter(slot => slot.pkmn)
+        .map(slot => Object.keys(pkmn).find(id => pkmn[id] === slot.pkmn));
+      
+      let filtered = Object.keys(pkmn).filter(id => {
+        const pokemon = pkmn[id];
+        if (!pokemon.caught || pokemon.caught === 0) return false;
+        
+        // Apply filters
+        if (filter === 'shiny' && !pokemon.shiny) return false;
+        if (filter === 'max-level' && pokemon.level !== 100) return false;
+        if (filter === 'team' && !teamPokemonIds.includes(id)) return false;
+        
+        return true;
       });
+      
+      // Sort by name
+      filtered.sort((a, b) => format(a).localeCompare(format(b)));
+      
+      filtered.forEach(id => {
+        const pokemon = pkmn[id];
+        const option = document.createElement('option');
+        option.value = id;
+        const indicators = [];
+        if (pokemon.shiny) indicators.push('✨');
+        if (pokemon.level === 100) indicators.push('⬆️');
+        if (teamPokemonIds.includes(id)) indicators.push('👥');
+        
+        option.textContent = `${format(id)} (Lvl ${pokemon.level || 1}) ${indicators.join(' ')}`;
+        select.appendChild(option);
+      });
+      
+      // Show count
+      if (filtered.length === 0) {
+        const option = document.createElement('option');
+        option.disabled = true;
+        option.textContent = '-- No Pokemon match this filter --';
+        select.appendChild(option);
+      }
     }
 
     loadPokemonForEdit(pokemonId) {
@@ -2017,6 +2520,8 @@
       if (!this.editingPokemon) return;
       
       const pokemon = pkmn[this.editingPokemon];
+      const oldLevel = pokemon.level;
+      const oldShiny = pokemon.shiny;
       
       // Save all changes
       pokemon.level = parseInt(document.getElementById('debug-edit-level').value) || 1;
@@ -2039,7 +2544,17 @@
       pokemon.hiddenAbilityCheck = document.getElementById('debug-edit-hidden-ability').checked;
       
       saveGame();
-      alert(`${format(this.editingPokemon)} has been updated!`);
+      
+      // Build change summary
+      const changes = [];
+      if (pokemon.level !== oldLevel) changes.push(`Level: ${oldLevel} → ${pokemon.level}`);
+      if (pokemon.shiny !== oldShiny) changes.push(pokemon.shiny ? 'Now Shiny ✨' : 'No longer Shiny');
+      
+      const message = changes.length > 0 
+        ? `✅ ${format(this.editingPokemon)} updated!\n${changes.join('\n')}`
+        : `✅ ${format(this.editingPokemon)} saved!`;
+      
+      this.showToast(message, 'success', 4000);
       console.log(`✅ Updated ${format(this.editingPokemon)}`);
     }
 
@@ -2048,6 +2563,7 @@
       
       const pokemon = pkmn[this.editingPokemon];
       const level = pokemon.level || 1;
+      const oldCount = pokemon.movepool ? pokemon.movepool.length : 0;
       
       // Clear movepool
       pokemon.movepool = [];
@@ -2072,8 +2588,9 @@
       saveGame();
       this.displayEditMoves(this.editingPokemon);
       this.searchEditMoves('');
-      alert(`${format(this.editingPokemon)} has re-learned ${pokemon.movepool.length} moves!`);
-      console.log(`✅ Re-learned moves for ${format(this.editingPokemon)}: ${pokemon.movepool.length} total`);
+      
+      this.showToast(`🔄 ${format(this.editingPokemon)} re-learned ${pokemon.movepool.length} moves!`, 'success', 4000);
+      console.log(`✅ Re-learned moves for ${format(this.editingPokemon)}: ${pokemon.movepool.length} total (was ${oldCount})`);
     }
 
     givePkmn(pokemon, level = 50, isShiny = false) {
